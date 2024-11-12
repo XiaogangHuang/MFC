@@ -1,6 +1,6 @@
 # MFC
 
-This is the C++ source code for MFC.
+This is the C++ source code for MFC and the corresponding executable.
 
 Descriptions:
 
