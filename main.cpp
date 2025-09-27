@@ -1,4 +1,5 @@
 #include "ClusterAnalysis.h"
+#include "dbscan.h"
 
 /*
  *  Get next word from a string.
@@ -27,7 +28,7 @@ int main(int argc, char** argv)
 	string myfile = "";
 	char str[20] = { '\0' };
 	cout << "Usage:\n"
-		<< "  .\\ClusterTree_KD [-a alg] [-nn k] [-c clusters] [-df data] [-pre preference] [-r normalization] [-t tree]\n"
+		<< "  .\\MFC [-a alg] [-nn k] [-c clusters] [-df data] [-pre preference] [-r normalization] [-t tree]\n"
 		<< "  where:\n"
 		<< "    alg				the algorithm you choose (default = 0)\n"
 		<< "    k				number of nearest neighbors per query\n"
@@ -38,11 +39,9 @@ int main(int argc, char** argv)
 		<< "    tree			output hierarchical structure (default = 0)\n"
 		<< "Results are sent to the standard output.\n\n"
 		<< "0. Run ClusterTree.\n"
-		<< "  .\\ClusterTree_KD -a 0 -nn 12 -c 3 -df iris\n\n"
+		<< "  .\\MFC -a 0 -nn 12 -c 3 -df iris\n\n"
 		<< "1. Run ClusterTree_MNN.\n"
-		<< "  .\\ClusterTree_KD -a 1 -nn 12 -c 3 -df iris\n\n"
-		<< "2. Run LDP-MST\n"
-		<< "  .\\ClusterTree_KD -a 2 -c 3 -df iris\n\n";
+		<< "  .\\MFC -a 1 -nn 12 -c 3 -df iris\n\n";
 	if (argc > 0)
 	{
 		int i = 1;
@@ -87,26 +86,22 @@ int main(int argc, char** argv)
 	string filename = rootfile + myfile + suffixes;
 	cout << filename << " " << k << " " << pre << endl;
 	ClusterAnalysis myClusterAnalysis;                      //Clustering algorithm object declaration
-	if (alg != 2)
-	{
-		myClusterAnalysis.Init((char*)filename.c_str(), k, alg, clu_num, r, o_tree, pre);
-		printf("Clusting the data...\n");
-		CYW_TIMER build_timer;
-		build_timer.start_my_timer();
-		myClusterAnalysis.Running();                   //Perform ClusterTree
-		build_timer.stop_my_timer();
-		printf("Running time = %.4f\n", build_timer.get_my_timer());
-	}
-	else
-	{
-		myClusterAnalysis.Init((char*)filename.c_str(), clu_num);	//Initialization
-		printf("Clusting the data...\n");
-		CYW_TIMER build_timer;
-		build_timer.start_my_timer();
-		myClusterAnalysis.Running_LDP_MST();                   //Perform ClusterTree
-		build_timer.stop_my_timer();
-		printf("Running time = %.4f\n", build_timer.get_my_timer());
-	}
+	myClusterAnalysis.Init((char*)filename.c_str(), k, alg, clu_num, r, o_tree, pre);
+	printf("Clustering the data...\n");
+	CYW_TIMER build_timer;
+	build_timer.start_my_timer();
+	myClusterAnalysis.Running();                   //Perform ClusterTree
+	build_timer.stop_my_timer();
+	printf("Running time = %.4f\n", build_timer.get_my_timer());
 	myClusterAnalysis.WriteToFile();                         //Save the result
+
+	//DBSCAN dbscan;             
+	//dbscan.Init((char*)filename.c_str(), k, pre);
+	//printf("Clustering the data...\n");
+	//CYW_TIMER build_timer;
+	//build_timer.start_my_timer();
+	//dbscan.Running();                   //Perform ClusterTree
+	//build_timer.stop_my_timer();
+	//printf("Running time = %.4f\n", build_timer.get_my_timer());
 	return 0;
 }

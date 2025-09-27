@@ -27,7 +27,7 @@ double* get_data(char* s, int dim,char* delims){
 void read_data_dim_size(char* filename, int* data_dim, int* data_size, char* delims){
     int n_size=0;
     int dim=0;
-    char s[10000];
+    char s[50000];
     freopen(filename,"r",stdin);
     while(gets_s(s))
     {
@@ -47,7 +47,7 @@ double* read_data(char* filename, char* delims){
     double* data= (double*) malloc (n_size*dim*sizeof(double));
     freopen(filename,"r",stdin);
     int counter=0;
-    char s[10000];
+    char s[50000];
     while(gets_s(s))
     {
         double* tmp_data= get_data( s, dim,delims);
@@ -66,7 +66,7 @@ double* read_data(char* filename, char* delims, int* dim, int* data_size){
     double* data= (double*) malloc ((*data_size)*(*dim)*sizeof(double));
     freopen(filename,"r",stdin);
     int counter=0;
-    char s[10000];
+    char s[50000];
     while(gets_s(s))
     {
         double* tmp_data= get_data( s,*dim,delims);

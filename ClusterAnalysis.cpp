@@ -1,7 +1,6 @@
 #pragma warning(disable:4996)
 #include "ClusterAnalysis.h"
 
-
 bool ClusterAnalysis::Init(char* fileName, int K, int alg, int clu_num, int r, int o_tree, double pre) {
     this->preference = pre;
     this->K = K;                            //set the K
@@ -78,6 +77,27 @@ void ClusterAnalysis::Running(){
         FindSaddlePoints();             // Find saddle points.
         ConstructClusterTree();         // Form cluster tree.
     }
+    else if (alg == 2)
+    {
+        SetArrivalPoints();             // Find point's epsilon neighborhood.
+        FindPioneers();                 // Find point's pioneer.
+        GenerateCusters_DPC();              // Form initial clusters.
+        if (clusterID > 1)
+        {
+            FindSaddlePoints();             // Find saddle points.
+            ConstructClusterTree();         // Form cluster tree.
+        }
+    }
+    else if (alg == 3)
+    {
+        SetArrivalPoints();             // Find point's epsilon neighborhood.
+        FindPioneers();                 // Find point's pioneer.
+        GenerateCusters();              // Form initial clusters.
+        if (clusterID > 1)
+        {
+            ConstructClusterTree_Dist();         // Form cluster tree.
+        }
+    }
     else
     {
         SetArrivalPoints_SNN();         // Find point's epsilon neighborhood.
@@ -129,6 +149,20 @@ void ClusterAnalysis::Normalization()
     }
 }
 
+double ClusterAnalysis::Density(vector< double >& vec, double& dc) {
+    double density = 0.0;
+    for (size_t jt = 0; jt < dataNum; jt++)
+    {
+        vector< double > vec1(dataDim);
+        for (size_t i = 0; i < dataDim; i++)
+        {
+            vec1[i] = dataSets(jt, i);
+        }
+        density += exp(-sqr_distance(vec, vec1)/dc);
+    }
+    return density;
+}
+
 double ClusterAnalysis::Density(vector< double >&  out_dists_sqr) {
     double density = 0.0;
     for (size_t jt = 0; jt < K; jt++)
@@ -140,13 +174,13 @@ double ClusterAnalysis::Density(vector< double >&  out_dists_sqr) {
 
 void ClusterAnalysis::SetArrivalPoints(){
     vector<double> pt(dataDim);
+    nanoflann::KNNResultSet<double> resultSet(K);
     for (int it = 0; it < dataNum; it++)
     {
         for (int jt = 0; jt < dataDim; jt++)
         {
             pt[jt] = dataSets(it, jt);
         }
-        nanoflann::KNNResultSet<double> resultSet(K);
         resultSet.init(&ret_indexes[0], &out_dists_sqr[0]);
         node_data_kd->index_->findNeighbors(resultSet, &pt[0]);
 
@@ -162,7 +196,7 @@ void ClusterAnalysis::SetArrivalPoints(){
     }
     FindMNN();
 
-    for (size_t i = 0; i < dataNum; i++)
+    /*for (size_t i = 0; i < dataNum; i++)
     {
         double sum = 0.0, std = 0.0;
         for (size_t j = 0; j < PNEI[i].size(); j++)
@@ -174,7 +208,7 @@ void ClusterAnalysis::SetArrivalPoints(){
         }
         state[i].density_mean = sum / K;
         state[i].density_std = sqrt((std - sum * state[i].density_mean) / (K - 1));
-    }
+    }*/
 
     //CalculateNaive();
     //CalculateRefined();
@@ -365,9 +399,9 @@ bool ClusterAnalysis::FindPioneers(){
     for (int it = 0; it < dataNum; it++)
     {
         int pioneer = -1;
-        for (int jt = 0; jt < PNEI[it].size(); jt++)
+        for (int jt = 0; jt < MNN[it].size(); jt++)
         {
-            int neiId = PNEI[it][jt];
+            int neiId = MNN[it][jt];
             if ((state[it].density < state[neiId].density || (state[it].density == state[neiId].density &&
                 state[neiId].pioneer == -1/* && (dataSets.row(it) - dataSets.row(neiId)).norm() == 0*/)))
             {
@@ -416,6 +450,34 @@ bool ClusterAnalysis::FindPioneers_MNN() {
     return true;
 }
 
+void ClusterAnalysis::GenerateCusters_DPC() {
+    // Point are traversed in descending order according to their densities.
+    vector<int> order(dataNum);
+    for (int it = 0; it < dataNum; it++)
+        order[it] = it;
+    State* temp = state;
+    sort(order.begin(), order.end(),
+        [temp](int a, int b) {return temp[a].density > temp[b].density; });
+    clusterID = 0;
+    for (int it = 0; it < dataNum; it++)
+    {
+        int processedPt = order[it];
+        int temp = processedPt;
+        if (state[processedPt].pioneer != -1)
+        {
+            temp = state[processedPt].pioneer;
+        }
+        if (state[temp].clusterId == -1)
+        {
+            ClusterCenters.push_back(temp);
+            state[temp].clusterId = clusterID++;
+        }
+        state[processedPt].clusterId = state[temp].clusterId;
+    }
+
+    printf("There are %d initial clusters.\n", clusterID);
+}
+
 void ClusterAnalysis::GenerateCusters(){
     // Point are traversed in descending order according to their densities.
     vector<int> order(dataNum);
@@ -441,123 +503,126 @@ void ClusterAnalysis::GenerateCusters(){
         state[processedPt].clusterId = state[temp].clusterId;
     }
 
-    // Searching for unstable areas
-    vector<vector<int>> votes(dataNum, vector<int>(clusterID, 0));
-    vector<int> mark1(dataNum, 0);
-    vector<int> unstableSet;
-    for (int it = 0; it < dataNum; it++)
+    if (true)
     {
-        if (state[it].pioneer != -1)
+        // Searching for unstable areas
+        vector<vector<int>> votes(dataNum, vector<int>(clusterID, 0));
+        vector<int> mark1(dataNum, 0);
+        vector<int> unstableSet;
+        for (int it = 0; it < dataNum; it++)
         {
-            for (size_t j = 0; j < PNEI[it].size(); j++)
+            if (state[it].pioneer != -1)
             {
-                int nei = PNEI[it][j];
-                votes[it][state[nei].clusterId]++;
-            }
-            if (2 * votes[it][state[it].clusterId] <= K)
-            {
-                unstableSet.push_back(it);
-                mark1[it] = 1;
+                for (size_t j = 0; j < PNEI[it].size(); j++)
+                {
+                    int nei = PNEI[it][j];
+                    votes[it][state[nei].clusterId]++;
+                }
+                if (2 * votes[it][state[it].clusterId] <= K)
+                {
+                    unstableSet.push_back(it);
+                    mark1[it] = 1;
+                }
             }
         }
-    }
 
-    /*vector< vector< int > > PCLUSTER;
-    PCLUSTER.resize(clusterID);
-    for (int it = 0; it < dataNum; it++)
-    {
-        int clust = state[it].clusterId;
-        PCLUSTER[clust].push_back(it);
-    }
-    vector< int > mark(dataNum, 0);
-    for (int it = 0; it < clusterID; it++)
-    {
-        for (size_t i = 0; i < PCLUSTER[it].size(); i++)
+        /*vector< vector< int > > PCLUSTER;
+        PCLUSTER.resize(clusterID);
+        for (int it = 0; it < dataNum; it++)
         {
-            int pnt = PCLUSTER[it][i];
-            for (size_t jt = 0; jt < PNEI[pnt].size(); jt++)
-            {
-                mark[PNEI[pnt][jt]] = 1;
-            }
-            printf("%3d %3d:", pnt, mark1[pnt]);
-            vector<int>& temp = PNEI[pnt];
-            for (size_t jt = 0; jt < temp.size(); jt++)
-            {
-                printf("  %3d ", temp[jt]);
-            }
-            printf("\n        ");
-            for (size_t jt = 0; jt < temp.size(); jt++)
-            {
-                printf("  %3d ", state[temp[jt]].clusterId);
-            }
-            printf("\n        ");
-            for (size_t jt = 0; jt < temp.size(); jt++)
-            {
-                printf("  %3d ", state[temp[jt]].pioneer);
-            }
-            printf("\n        ");
-            for (size_t jt = 0; jt < temp.size(); jt++)
-            {
-                printf("  %3d ", IntersectionCount(mark, temp[jt]));
-            }
-            printf("\n        ");
-            for (size_t jt = 0; jt < temp.size(); jt++)
-            {
-                printf(" %.2lf ", state[temp[jt]].density);
-            }
-            printf("\n");
-            for (size_t jt = 0; jt < PNEI[pnt].size(); jt++)
-            {
-                mark[PNEI[pnt][jt]] = 0;
-            }
+            int clust = state[it].clusterId;
+            PCLUSTER[clust].push_back(it);
         }
-    }*/
+        vector< int > mark(dataNum, 0);
+        for (int it = 0; it < clusterID; it++)
+        {
+            for (size_t i = 0; i < PCLUSTER[it].size(); i++)
+            {
+                int pnt = PCLUSTER[it][i];
+                for (size_t jt = 0; jt < PNEI[pnt].size(); jt++)
+                {
+                    mark[PNEI[pnt][jt]] = 1;
+                }
+                printf("%3d %3d:", pnt, mark1[pnt]);
+                vector<int>& temp = PNEI[pnt];
+                for (size_t jt = 0; jt < temp.size(); jt++)
+                {
+                    printf("  %3d ", temp[jt]);
+                }
+                printf("\n        ");
+                for (size_t jt = 0; jt < temp.size(); jt++)
+                {
+                    printf("  %3d ", state[temp[jt]].clusterId);
+                }
+                printf("\n        ");
+                for (size_t jt = 0; jt < temp.size(); jt++)
+                {
+                    printf("  %3d ", state[temp[jt]].pioneer);
+                }
+                printf("\n        ");
+                for (size_t jt = 0; jt < temp.size(); jt++)
+                {
+                    printf("  %3d ", IntersectionCount(mark, temp[jt]));
+                }
+                printf("\n        ");
+                for (size_t jt = 0; jt < temp.size(); jt++)
+                {
+                    printf(" %.2lf ", state[temp[jt]].density);
+                }
+                printf("\n");
+                for (size_t jt = 0; jt < PNEI[pnt].size(); jt++)
+                {
+                    mark[PNEI[pnt][jt]] = 0;
+                }
+            }
+        }*/
 
-    for (size_t i = 0; i < unstableSet.size(); i++)
-    {
-        int processedPt = unstableSet[i];
-        vector<double> votes(clusterID, 0);
-        for (size_t j = 0; j < PNEI[processedPt].size(); j++)
+        for (size_t i = 0; i < unstableSet.size(); i++)
         {
-            int pt = PNEI[processedPt][j];
-            if (pt == processedPt)
-            {
-                votes[state[pt].clusterId] += 0.5;
-            }
-            else if (mark1[pt] != 1)
-            {
-                votes[state[pt].clusterId] += 1;
-            }
-        }
-        int maxVote = max_element(votes.begin(), votes.end()) - votes.begin();
-        if (votes[maxVote] > 0 && maxVote != state[processedPt].clusterId)
-        {
+            int processedPt = unstableSet[i];
+            vector<double> votes1(clusterID, 0);
             for (size_t j = 0; j < PNEI[processedPt].size(); j++)
             {
                 int pt = PNEI[processedPt][j];
-                if (state[pt].clusterId == maxVote)
+                if (pt == processedPt)
                 {
-                    state[processedPt].pioneer = pt;
-                    break;
+                    votes1[state[pt].clusterId] += 0.5;
+                }
+                else if (mark1[pt] != 1)
+                {
+                    votes1[state[pt].clusterId] += 1;
                 }
             }
-            state[processedPt].clusterId = maxVote;
-        }
-        mark1[processedPt] = 0;
-    }
-
-    for (size_t i = 0; i < dataNum; i++)
-    {
-        int pioneer = state[i].pioneer;
-        if (pioneer != -1 && state[i].clusterId != state[pioneer].clusterId)
-        {
-            for (size_t j = 0; j < PNEI[i].size(); j++)
+            int maxVote = max_element(votes1.begin(), votes1.end()) - votes1.begin();
+            if (votes1[maxVote] > 0 && maxVote != state[processedPt].clusterId)
             {
-                int pt = PNEI[i][j];
-                if (pt != i && state[pt].clusterId == state[i].clusterId)
+                for (size_t j = 0; j < PNEI[processedPt].size(); j++)
                 {
-                    state[i].pioneer = pt;
-                    break;
+                    int pt = PNEI[processedPt][j];
+                    if (state[pt].clusterId == maxVote)
+                    {
+                        state[processedPt].pioneer = pt;
+                        break;
+                    }
+                }
+                state[processedPt].clusterId = maxVote;
+            }
+            mark1[processedPt] = 0;
+        }
+
+        for (size_t i = 0; i < dataNum; i++)
+        {
+            int pioneer = state[i].pioneer;
+            if (pioneer != -1 && state[i].clusterId != state[pioneer].clusterId)
+            {
+                for (size_t j = 0; j < PNEI[i].size(); j++)
+                {
+                    int pt = PNEI[i][j];
+                    if (pt != i && state[pt].clusterId == state[i].clusterId)
+                    {
+                        state[i].pioneer = pt;
+                        break;
+                    }
                 }
             }
         }
@@ -1204,7 +1269,7 @@ void ClusterAnalysis::CalculateConsolidation(vector< double >& scores)
     //printf("\n\n");*/
 
 
-    // 计算鞍部点的密度与最高峰的密度的比值
+    // 计算鞍点的密度与最高峰的密度的比值
     vector< double > macro_scores(AdjClust.size());
     for (int it = 0; it < AdjClust.size(); it++)
     {
@@ -1459,6 +1524,212 @@ int ClusterAnalysis::ConstructClusterTree() {
     //}
 }
 
+void ClusterAnalysis::CalculateConsolidation_Dist(vector< double >& scores)
+{
+    for (int it = 0; it < AdjClust.size(); it++)
+    {
+        scores[it] = 1.0 / (dataSets.row(ClusterCenters[AdjClust[it][0]]) - dataSets.row(ClusterCenters[AdjClust[it][1]])).norm();
+    }
+}
+
+int ClusterAnalysis::ConstructClusterTree_Dist() {
+    DisjSet disjSet(clusterID);
+    vector< double > merge_scores(AdjClust.size());
+    CalculateConsolidation_Dist(merge_scores);
+    vector<int> order(AdjClust.size());
+    for (int it = 0; it < AdjClust.size(); it++)
+        order[it] = it;
+
+    sort(order.begin(), order.end(),
+        [merge_scores](int a, int b) { return merge_scores[a] > merge_scores[b]; });
+    vector< vector< int > > MST;
+
+    vector< double > MST_scores;
+    vector< vector< int > > IND(clusterID, vector<int>(clusterID, 0));
+    for (int it = 0; it < AdjClust.size(); it++)
+    {
+        int cluster_1 = AdjClust[order[it]][0];
+        int cluster_2 = AdjClust[order[it]][1];
+        if (disjSet.Is_same(cluster_1, cluster_2) == false)
+        {
+            disjSet.Union(cluster_1, cluster_2);
+            MST.push_back({ cluster_1, cluster_2 });
+            MST_scores.push_back(merge_scores[order[it]]);
+            IND[cluster_1][cluster_2] = 1;
+            IND[cluster_2][cluster_1] = 1;
+            if (disjSet.Size() == 1)
+                break;
+        }
+    }
+
+    {
+        vector< int > cluster(clusterID, -1);
+        int ncl = 0;
+        for (size_t it = 0; it < clusterID; it++)
+        {
+            if (cluster[it] == -1)
+            {
+                cluster[it] = ncl;
+                vector < int > queue(clusterID, 0);
+                int front = 0, rear = 0;
+                queue[rear] = it;
+                rear += 1;
+                while (front != rear)
+                {
+                    int p = queue[front++];
+                    for (size_t j = 0; j < clusterID; j++)
+                    {
+                        if (IND[p][j] + IND[j][p] > 0 && cluster[j] == -1)
+                        {
+                            cluster[j] = ncl;
+                            queue[rear] = j;
+                            rear++;
+                        }
+                    }
+                }
+                ncl++;
+            }
+        }
+        printf("Minimum number of clusters: %d\n", ncl);
+        if (ncl == clu_num)
+        {
+            printf("Obtain the desired clusters: %d\n", 0);
+            for (size_t it = 0; it < dataNum; it++)
+            {
+                state[it].clusterID = cluster[state[it].clusterId];
+            }
+            if (o_tree == 0)
+            {
+                return 0;
+            }
+        }
+        if (ncl > clu_num)
+        {
+            printf("Minimum number of clusters is greater than desired number of clusters\n");
+            return 0;
+        }
+        MERGE.push_back(move(cluster));
+    }
+
+    vector< int > sz(clusterID, 0);
+    for (int it = 0; it < dataNum; it++)
+    {
+        int clust = state[it].clusterId;
+        sz[clust]++;
+    }
+    int i = MST.size();
+    while (i > 0)
+    {
+        int s1 = 0, s2 = 0;
+        int p, q;
+        while (s1 < MinSize || s2 < MinSize)
+        {
+            s1 = 0; s2 = 0;
+            i--;
+            if (i < 0)
+            {
+                break;
+            }
+            p = MST[i][0];
+            q = MST[i][1];
+            vector < int > queue(clusterID, 0);
+            int front = 0, rear = 0;
+            queue[rear] = p;
+            rear = rear + 1;
+            vector<int> visited(clusterID, 0);
+            visited[p] = 1;
+            while (front != rear)
+            {
+                int temp = queue[front];
+                s1 += sz[temp];
+                front++;
+                for (size_t j = 0; j < clusterID; j++)
+                {
+                    if (IND[temp][j] + IND[j][temp] > 0 && j != q && visited[j] == 0)
+                    {
+                        visited[j] = 1;
+                        queue[rear] = j;
+                        rear += 1;
+                    }
+                }
+            }
+            front = 0;
+            rear = 0;
+            queue[rear] = q;
+            rear++;
+            visited[q] = 1;
+            while (front != rear)
+            {
+                int temp = queue[front];
+                s2 += sz[temp];
+                front++;
+                for (size_t j = 0; j < clusterID; j++)
+                {
+                    if (IND[temp][j] + IND[j][temp] > 0 && j != p && visited[j] == 0)
+                    {
+                        visited[j] = 1;
+                        queue[rear] = j;
+                        rear += 1;
+                    }
+                }
+            }
+        }
+        if (i < 0)
+        {
+            break;
+        }
+        IND[p][q] = 0;
+        IND[q][p] = 0;
+        ClusterTree.push_back({ (double)p, (double)q, MST_scores[i] });
+        vector< int > cluster(clusterID, -1);
+        int ncl = 0;
+        for (size_t it = 0; it < clusterID; it++)
+        {
+            if (cluster[it] == -1)
+            {
+                cluster[it] = ncl;
+                vector < int > queue(clusterID, 0);
+                int front = 0, rear = 0;
+                queue[rear] = it;
+                rear += 1;
+                int clustersize = sz[it];
+                while (front != rear)
+                {
+                    int p = queue[front++];
+                    for (size_t j = 0; j < clusterID; j++)
+                    {
+                        if (IND[p][j] + IND[j][p] > 0 && cluster[j] == -1)
+                        {
+                            clustersize += sz[j];
+                            cluster[j] = ncl;
+                            queue[rear] = j;
+                            rear++;
+                        }
+                    }
+                }
+                if (clustersize > 0)
+                {
+                    ncl++;
+                }
+            }
+        }
+        if (ncl == clu_num)
+        {
+            printf("Obtain the desired clusters: %d\n", MERGE.size());
+            for (size_t it = 0; it < dataNum; it++)
+            {
+                state[it].clusterID = cluster[state[it].clusterId];
+            }
+            if (o_tree == 0)
+            {
+                return 0;
+            }
+        }
+        MERGE.push_back(move(cluster));
+    }
+
+    return 1;
+}
 
 void ClusterAnalysis::SetArrivalPoints_SNN() {
     vector<double> pt(dataDim);
@@ -1672,423 +1943,6 @@ double ClusterAnalysis::CalculateDensity_SNN(vector< double >& pt) {
 }
 
 
-bool ClusterAnalysis::Init(char* fileName, int nc) {
-    this->clu_num = nc;
-
-    int dim;
-    int data_size;
-    cout << "reading data..." << endl;
-    double* raw_data = read_data((char*)fileName, (char*)" ", &dim, &data_size);
-    dataNum = data_size;
-    dataDim = dim - 1;
-    dataSets.resize(dataNum, dataDim);
-    for (size_t i = 0; i < dataNum; i++) {
-        for (size_t j = 0; j < dataDim; j++)
-            dataSets(i, j) = raw_data[dim * i + j];
-    }
-    free(raw_data);
-
-    state = (State*)malloc(data_size * sizeof(State));
-    if (state != NULL)
-    {
-        for (size_t i = 0; i < dataNum; i++)
-        {
-            state[i].pioneer = -1;
-            state[i].clusterId = -1;
-        }
-    }
-    //printMatrix(dataSets);
-
-    CYW_TIMER build_timer;
-    build_timer.start_my_timer();
-    cout << "building the trees...\n";
-    node_data_kd = new nanoflann::KDTreeEigenMatrixAdaptor<MatrixXd>(dataDim, dataSets, 10);
-    build_timer.stop_my_timer();
-
-    //printMatrix(dataSets);
-    printf("n = %d  dim = %d\n", dataNum, dataDim);
-    printf("kd-tree build time = %.4f\n", build_timer.get_my_timer());
-    return true;
-}
-
-void ClusterAnalysis::Running_LDP_MST() {
-    Parameters_LDP_MST();
-    FindPioneers_LDP_MST();           // Find point's pioneer.
-    GenerateCusters_LDP_MST();        // Form initial clusters.
-    ExtractClusters();                // Extract clustering results.
-}
-
-void ClusterAnalysis::Parameters_LDP_MST()
-{
-    int temp = 100;
-    vector< double >  out_dists_sqr1(temp);
-    vector< size_t > ret_indexes1(temp);
-    vector< vector< int > > KNN1;
-    vector<double> pt(dataDim);
-    for (int it = 0; it < dataNum; it++)
-    {
-        for (int jt = 0; jt < dataDim; jt++)
-        {
-            pt[jt] = dataSets(it, jt);
-        }
-        nanoflann::KNNResultSet<double> resultSet(temp);
-        resultSet.init(&ret_indexes1[0], &out_dists_sqr1[0]);
-        node_data_kd->index_->findNeighbors(resultSet, &pt[0]);
-
-        vector<int> nei;
-        nei.reserve(temp);
-        for (int i = 0; i < temp; i++)
-        {
-            if (ret_indexes1[i] != it)
-            {
-                nei.push_back(ret_indexes1[i]);
-            }
-        }
-        KNN1.push_back(move(nei));
-    }
-
-    int r = 0;
-    int flag = 0;
-    vector<int> nb(dataNum, 0);
-    int count = 0, count1 = dataNum, count2 = dataNum;
-    while (flag == 0)
-    {
-        for (size_t i = 0; i < dataNum; i++)
-        {
-            int k = KNN1[i][r];
-            nb[k] += 1;
-            if (nb[k] == 1)
-            {
-                count2 -= 1;
-            }
-        }
-        r += 1;
-        if (count1 == count2)
-        {
-            count += 1;
-        }
-        else
-        {
-            count = 1;
-        }
-        if (count2 == 0 || (r > 1 && count >= 2))
-        {
-            flag = 1;
-        }
-        count1 = count2;
-    }
-    lambda = r;
-    K = *max_element(nb.begin(), nb.end());
-    printf("K: %d, lambda: %d\n", K, lambda);
-
-    for (size_t i = 0; i < dataNum; i++)
-    {
-        vector<int> nei;
-        nei.reserve(K);
-        double sumdist = 0.0;
-        for (size_t j = 0; j < K; j++)
-        {
-            nei.push_back(KNN1[i][j]);
-            sumdist += (dataSets.row(i) - dataSets.row(KNN1[i][j])).norm();
-        }
-        state[i].density = nb[i] / sumdist;
-        PNEI.push_back(nei);
-    }
-}
-
-bool ClusterAnalysis::FindPioneers_LDP_MST() {
-    for (int it = 0; it < dataNum; it++)
-    {
-        double max = state[it].density;
-        for (int jt = 0; jt < lambda; jt++)
-        {
-            int neiId = PNEI[it][jt];
-            if (max < state[neiId].density)
-            {
-                max = state[neiId].density;
-                state[it].pioneer = neiId;
-            }
-        }
-    }
-    return true;
-}
-
-void ClusterAnalysis::GenerateCusters_LDP_MST() {
-    // Point are traversed in descending order according to their densities.
-    vector<int> order(dataNum);
-    for (int it = 0; it < dataNum; it++)
-        order[it] = it;
-    State* temp = state;
-    sort(order.begin(), order.end(),
-        [temp](int a, int b) {return temp[a].density > temp[b].density; });
-    clusterID = 0;
-    for (int it = 0; it < dataNum; it++)
-    {
-        int processedPt = order[it];
-        int pioneer = state[processedPt].pioneer;
-        if(pioneer == -1)
-        {
-            ClusterCenters.push_back(processedPt);
-            state[processedPt].clusterId = clusterID++;
-        }
-        else
-        {
-            state[processedPt].clusterId = state[pioneer].clusterId;
-        }
-    }
-
-    printf("There are %d initial clusters.\n", clusterID);
-}
-
-void ClusterAnalysis::CalculateSND(vector< vector< int > >& MST)
-{
-    vector< vector< int > > PCLUSTER;
-    PCLUSTER.resize(clusterID);
-    for (int it = 0; it < dataNum; it++)
-    {
-        int clust = state[it].clusterId;
-        PCLUSTER[clust].push_back(it);
-    }
-
-    vector< vector< int > > NLDP;
-    vector<int> mark(dataNum, 0);
-    for (size_t i = 0; i < PCLUSTER.size(); i++)
-    {
-        vector< int > nldp;
-        for (size_t j = 0; j < PCLUSTER[i].size(); j++)
-        {
-            int pt = PCLUSTER[i][j];
-            if (mark[pt] == 0)
-            {
-                mark[pt] = 1;
-                nldp.push_back(pt);
-            }
-            for (size_t nei = 0; nei < lambda; nei++)
-            {
-                int nn = PNEI[pt][nei];
-                if (mark[nn] == 0)
-                {
-                    mark[nn] = 1;
-                    nldp.push_back(nn);
-                }
-            }
-        }
-        for (size_t j = 0; j < nldp.size(); j++)
-        {
-            mark[nldp[j]] = 0;
-        }
-        NLDP.push_back(nldp);
-    }
-
-    double maxd = 0.0;
-    for (size_t i = 0; i < clusterID; i++)
-    {
-        for (size_t j = i + 1; j < clusterID; j++)
-        {
-            double dist = (dataSets.row(ClusterCenters[i]) - dataSets.row(ClusterCenters[j])).norm();
-            if (dist > maxd)
-            {
-                maxd = dist;
-            }
-        }
-    }
-    vector< double > SND;
-    for (size_t i = 0; i < clusterID; i++)
-    {
-        for (size_t j = 0; j < NLDP[i].size(); j++)
-        {
-            mark[NLDP[i][j]] = 1;
-        }
-        for (size_t j = i + 1; j < clusterID; j++)
-        {
-            AdjClust.push_back({ (int)i, (int)j });
-            int count = 0;
-            double sum = 0.0;
-            for (size_t jt = 0; jt < NLDP[j].size(); jt++)
-            {
-                if (mark[NLDP[j][jt]] > 0)
-                {
-                    //printf("%d ", NLDP[j][jt]);
-                    count += 1;
-                    sum += state[NLDP[j][jt]].density;
-                }
-            }
-            if (count > 0)
-            {
-                SND.push_back((dataSets.row(ClusterCenters[i]) - dataSets.row(ClusterCenters[j])).norm()
-                    / (count * sum));
-            }
-            else
-            {
-                SND.push_back(maxd * (1 + (dataSets.row(ClusterCenters[i]) - dataSets.row(ClusterCenters[j])).norm()));
-            }
-        }
-        for (size_t j = 0; j < NLDP[i].size(); j++)
-        {
-            mark[NLDP[i][j]] = 0;
-        }
-    }
-    //printf("\n\n");
-    vector<int> order;
-    order.resize(AdjClust.size());
-    for (int it = 0; it < AdjClust.size(); it++)
-        order[it] = it;
-    vector<double>& temp = SND;
-    sort(order.begin(), order.end(),
-        [temp](int a, int b) { return temp[a] < temp[b]; });
-
-    DisjSet disjSet(clusterID);
-    for (int it = 0; it < AdjClust.size(); it++)
-    {
-        int cluster_1 = AdjClust[order[it]][0];
-        int cluster_2 = AdjClust[order[it]][1];
-        if (disjSet.Is_same(cluster_1, cluster_2) == false)
-        {
-            disjSet.Union(cluster_1, cluster_2);
-            MST.push_back({ cluster_1, cluster_2 });
-            if (disjSet.Size() == 1)
-                break;
-        }
-    }
-
-}
-
-int ClusterAnalysis::iscontain(vector<int>& q, int front, int rear, int x)
-{
-    for (size_t i = front; i < rear; i++)
-    {
-        if (q[i] == x)
-        {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-void ClusterAnalysis::ExtractClusters() {
-    /*ofstream of1("data\\result1.txt");
-    for (int i = 0; i < dataNum; i++)
-    {
-        of1 << state[i].clusterId << " " << state[i].density << endl;
-    }
-    of1.close();*/
-    vector< vector< int > > MST;
-    CalculateSND(MST);
-    int minsize = ceil(0.018 * dataNum);
-    vector< vector< int > > IND(clusterID, vector<int>(clusterID, 0));
-
-    for (size_t i = 0; i < MST.size(); i++)
-    {
-        int cluster_1 = MST[i][0];
-        int cluster_2 = MST[i][1]; 
-        IND[cluster_1][cluster_2] = 1;
-        IND[cluster_2][cluster_1] = 1;
-    }
-    vector< int > sz(clusterID, 0);
-    for (int it = 0; it < dataNum; it++)
-    {
-        int clust = state[it].clusterId;
-        sz[clust]++;
-    }
-
-    int k = 1, i = MST.size();
-    while (k < clu_num)
-    {
-        int s1 = 0, s2 = 0;
-        int p = MST[i - 1][0];
-        int q = MST[i - 1][1];
-        while (s1 < minsize || s2 < minsize)
-        {
-            s1 = 0; s2 = 0;
-            vector<int> visited(clusterID,0);
-            i -= 1;
-            p = MST[i][0];
-            q = MST[i][1]; 
-            vector < int > queue(clusterID, 0);
-            int front = 0, rear = 0; 
-            queue[rear] = p;
-            rear = rear + 1;
-            while (front != rear)
-            {
-                int temp = queue[front];
-                s1 = s1 + sz[temp];
-                visited[temp] = 1;
-                front += 1;
-                for (size_t j = 0; j < clusterID; j++)
-                {
-                    if (IND[temp][j] + IND[j][temp] > 0 && j!= q && visited[j] == 0 && 
-                        iscontain(queue, front, rear,j) == 0)
-                    {
-                        queue[rear] = j;
-                        rear += 1;
-                    }
-                }
-            }
-            front = 0;
-            rear = 0;
-            queue[rear] = q;
-            rear = rear + 1;
-            while (front != rear)
-            {
-                int temp = queue[front];
-                s2 = s2 + sz[temp];
-                visited[temp] = 1;
-                front += 1;
-                for (size_t j = 0; j < clusterID; j++)
-                {
-                    if (IND[temp][j] + IND[j][temp] > 0 && j != p && visited[j] == 0 &&
-                        iscontain(queue, front, rear, j) == 0)
-                    {
-                        queue[rear] = j;
-                        rear += 1;
-                    }
-                }
-            }
-        }
-        IND[p][q] = 0;
-        IND[q][p] = 0;
-        k++;
-    }
-    vector< int > cluster(clusterID, -1);
-    int ncl = -1;
-    vector< int > sumedge(clu_num, 1);
-    for (size_t i = 0; i < clusterID; i++)
-    {
-        if (cluster[i] == -1)
-        {
-            ncl = ncl + 1;
-            vector < int > queue(clusterID, 0);
-            vector < int > visited(clusterID, 0);
-            int front = 0,rear = 0; 
-            queue[rear] = i;
-            visited[i] = 1;
-            rear += 1;
-            sumedge[ncl] = 0;
-            while (front != rear)
-            {
-                int p = queue[front];
-                front += 1;
-                cluster[p] = ncl;
-                for (size_t j = 0; j < clusterID; j++)
-                {
-                    if (IND[p][j] + IND[j][p] > 0 && cluster[j] == -1 && visited[j] == 0)
-                    {
-                        visited[j] = 1;
-                        queue[rear] = j;
-                        rear += 1;
-                    }
-                }
-            }
-        }
-    }
-    for (size_t i = 0; i < dataNum; i++)
-    {
-        int clu = state[i].clusterId;
-        state[i].clusterId = cluster[clu];
-    }
-}
-
-
 bool ClusterAnalysis::WriteToFile(){
     printf("Saving the results...\n");
     ofstream of1("data\\result.txt");
@@ -2098,15 +1952,15 @@ bool ClusterAnalysis::WriteToFile(){
     }
     of1.close();
 
-    if (alg != 2)
+    ofstream of5("data\\kresult.txt");
+    for (int i = 0; i < dataNum; i++)
     {
-        ofstream of1("data\\kresult.txt");
-        for (int i = 0; i < dataNum; i++)
-        {
-            of1 << state[i].clusterID << endl;
-        }
-        of1.close();
+        of5 << state[i].clusterID << endl;
+    }
+    of5.close();
 
+    if (alg != 4)
+    {
         ofstream of2("data\\saddle.txt");
         for (int it = 0; it < SaddlePoints.size(); it++)
         {

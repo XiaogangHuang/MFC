@@ -56,6 +56,7 @@ public:
     bool Init(char* fileName, int K, int alg, int clu_num, int r, int o_tree, double pre);    //Initialization operation
     void Running();
     void Normalization();
+    double Density(vector< double >& vec, double& dc);
     double Density(vector< double >& out_dists_sqr);
     void SetArrivalPoints();
     void FindMNN();
@@ -66,6 +67,7 @@ public:
     void CalculateRefined();*/
     bool FindPioneers();
     bool FindPioneers_MNN();
+    void GenerateCusters_DPC();
     void GenerateCusters();
     void GenerateCusters_MNN();
     void GenerateCusters_SNNDPC();
@@ -75,21 +77,16 @@ public:
     void CalculateConsolidation(vector< double >& scores);
     int ConstructClusterTree();
 
+    void CalculateConsolidation_Dist(vector<double>& scores);
+
+    int ConstructClusterTree_Dist();
+
     void SetArrivalPoints_SNN();
     double EuclideanDist(vector<double>& neis, int pt);
     double SNNLocalDensity(vector<double>& coord, vector<int>& neis, vector<int>& mark);
     double SNNLocalDensity(vector<int>& neis, vector<int>& mark, int j);
     void FindSaddlePoints_SNN();
     double CalculateDensity_SNN(vector<double>& pt);
-
-    bool Init(char* fileName, int nc);    //Initialization operation
-    void Running_LDP_MST();
-    void Parameters_LDP_MST();
-    bool FindPioneers_LDP_MST();
-    void GenerateCusters_LDP_MST();
-    void CalculateSND(vector< vector< int > >& MST);
-    int iscontain(vector<int>& q, int front, int rear, int x);
-    void ExtractClusters();
 
     bool WriteToFile();    //save results
 };

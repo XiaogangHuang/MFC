@@ -8,7 +8,7 @@
 using namespace std;
 using namespace Eigen;
 
-double sqr_distance(vector<float>& v1, vector<float>& v2);
+double sqr_distance(vector<double>& v1, vector<double>& v2);
 
 void printMatrix(MatrixXd& dataSets);
 
